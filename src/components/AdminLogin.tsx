@@ -1,24 +1,34 @@
 import { useState } from 'react';
 import { useStore } from '../store';
+import { useNavigate } from 'react-router-dom';
 import { Lock, User, LogIn, ArrowLeft, Eye, EyeOff, Zap } from 'lucide-react';
 import toast from '../utils/toast';
 
 export default function AdminLogin() {
-  const { login, setCurrentPage } = useStore();
+  const { login, admin } = useStore();
+  const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  if (admin.isLoggedIn) {
+    navigate('/admin/dashboard', { replace: true });
+    return null;
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username || !password) {
       toast.error('Harap isi username dan password');
       return;
     }
-    const success = login(username, password);
+    setLoading(true);
+    const success = await login(username, password);
+    setLoading(false);
     if (success) {
       toast.success('Selamat datang, Admin!');
-      setCurrentPage('admin-dashboard');
+      navigate('/admin/dashboard');
     } else {
       toast.error('Username atau password salah');
     }
@@ -28,7 +38,7 @@ export default function AdminLogin() {
     <div className="min-h-[80vh] flex items-center justify-center px-4 py-8 bg-gradient-to-br from-slate-50 to-blue-50">
       <div className="w-full max-w-md">
         <button
-          onClick={() => setCurrentPage('home')}
+          onClick={() => navigate('/')}
           className="flex items-center gap-2 text-gray-500 hover:text-blue-600 transition mb-8"
         >
           <ArrowLeft className="w-5 h-5" />
@@ -54,6 +64,7 @@ export default function AdminLogin() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={loading}
                 />
               </div>
             </div>
@@ -66,6 +77,7 @@ export default function AdminLogin() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full pl-10 pr-12 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={loading}
                 />
                 <button
                   type="button"
@@ -78,10 +90,15 @@ export default function AdminLogin() {
             </div>
             <button
               type="submit"
-              className="w-full px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-lg shadow-blue-500/30"
+              disabled={loading}
+              className="w-full px-6 py-3 bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-700 hover:to-cyan-600 text-white font-bold rounded-xl transition flex items-center justify-center gap-2 shadow-lg shadow-blue-500/30 disabled:opacity-60"
             >
-              <LogIn className="w-5 h-5" />
-              Masuk Dashboard
+              {loading ? (
+                <span className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
+              ) : (
+                <LogIn className="w-5 h-5" />
+              )}
+              {loading ? 'Memproses...' : 'Masuk Dashboard'}
             </button>
           </form>
         </div>
