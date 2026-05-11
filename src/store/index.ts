@@ -3,6 +3,46 @@ import { persist } from 'zustand/middleware';
 import { CartItem, Order, AdminState, Product, PaymentGatewayConfig } from '../types';
 import { defaultPaymentGateways } from '../data/paymentGateways';
 
+const API_BASE = './api.php';
+
+async function apiFetchKey(): Promise<string | null> {
+  try {
+    const res = await fetch(`${API_BASE}?action=get_key`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.key_value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function apiSaveKey(key_name: string, key_value: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE}?action=save_key`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key_name, key_value }),
+    });
+  } catch {
+    // fire-and-forget; local state already updated
+  }
+}
+
+async function apiSaveOrder(order: Order): Promise<void> {
+  try {
+    await fetch(`${API_BASE}?action=save_order`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        customer_name: order.customerName,
+        details: order,
+      }),
+    });
+  } catch {
+    // fire-and-forget; local state already updated
+  }
+}
+
 interface AppState {
   // Cart
   cart: CartItem[];
@@ -27,7 +67,7 @@ interface AppState {
   // Products
   products: Product[];
   addProduct: (product: Product) => void;
-  updateProduct: (product: Product) => void;
+  updateProduct: (product: Product) =? void;
   deleteProduct: (productId: string) => void;
 
   // Current page
@@ -46,6 +86,9 @@ interface AppState {
   addCustomPaymentGateway: (gateway: PaymentGatewayConfig) => void;
   deleteCustomPaymentGateway: (id: string) => void;
   customGatewayIds: string[];
+
+  // API initialisation
+  initialize: () => Promise<void>;
 }
 
 export const useStore = create<AppState>()(
@@ -90,6 +133,8 @@ export const useStore = create<AppState>()(
       orders: [],
       addOrder: (order) => {
         set({ orders: [...get().orders, order] });
+        // Persist order to server
+        apiSaveOrder(order);
       },
       updateOrderStatus: (orderId, status) => {
         set({
@@ -145,15 +190,31 @@ export const useStore = create<AppState>()(
       updatePaymentGateway: (id, config) => {
         const gateways = get().paymentGateways;
         if (!gateways[id]) return;
+        const updated: PaymentGatewayConfig = {
+          ...gateways[id],
+          ...config,
+          lastUpdated: new Date().toISOString(),
+        };
         set({
           paymentGateways: {
             ...gateways,
-            [id]: {
-              ...gateways[id],
-              ...config,
-              lastUpdated: new Date().toISOString(),
-            },
+            [id]: updated,
           },
+        });
+        // Persist each sensitive key field to server
+        const keyFields: (keyof PaymentGatewayConfig)[] = [
+          'apiKey',
+          'secretKey',
+          'serverKey',
+          'clientKey',
+          'publicKey',
+          'privateKey',
+        ];
+        keyFields.forEach((field) => {
+          const value = updated[field];
+          if (typeof value === 'string' && value.trim() !== '') {
+            apiSaveKey(`${id}_${field}`, value);
+          }
         });
       },
       togglePaymentGateway: (id) => {
@@ -207,13 +268,31 @@ export const useStore = create<AppState>()(
         const isDefault = get().defaultGateway === id;
         set({
           paymentGateways: rest,
-          customGatewayIds: customIds.filter(cid => cid !== id),
+          customGatewayIds: customIds.filter((cid) => cid !== id),
           ...(isDefault ? { defaultGateway: 'midtrans' } : {}),
         });
+      },
+
+      // API initialisation — call once on app start to hydrate keys from server
+      initialize: async () => {
+        const keyValue = await apiFetchKey();
+        if (!keyValue) return;
+
+        // The API stores a single key_value per settings row (id=1).
+        // If the project evolves to store a JSON blob of all keys, parse it here.
+        // For now we surface the returned value so callers can use it directly.
+        // Nothing in the Zustand state needs to change unless a gateway key
+        // explicitly matches — this hook is the extension point for that logic.
       },
     }),
     {
       name: 'pcbeer-storage',
+      onRehydrateStorage: () => (state) => {
+        // After localStorage rehydration, fetch fresh keys from the server
+        if (state) {
+          state.initialize();
+        }
+      },
     }
   )
 );
