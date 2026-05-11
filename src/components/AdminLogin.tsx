@@ -54,7 +54,6 @@ export default function AdminLogin() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="admin"
                 />
               </div>
             </div>
@@ -67,7 +66,6 @@ export default function AdminLogin() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="w-full pl-10 pr-12 py-3 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="admin123"
                 />
                 <button
                   type="button"
@@ -86,14 +84,6 @@ export default function AdminLogin() {
               Masuk Dashboard
             </button>
           </form>
-
-          <div className="mt-6 p-4 bg-blue-50 rounded-xl border border-blue-100">
-            <h4 className="text-sm font-semibold text-blue-800 mb-2 flex items-center gap-1">
-              🔑 Demo Credentials:
-            </h4>
-            <p className="text-xs text-blue-600 font-mono">Username: <span className="font-bold">admin</span></p>
-            <p className="text-xs text-blue-600 font-mono">Password: <span className="font-bold">admin123</span></p>
-          </div>
         </div>
       </div>
     </div>
