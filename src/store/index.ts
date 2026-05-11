@@ -5,41 +5,89 @@ import { defaultPaymentGateways } from '../data/paymentGateways';
 
 const API_BASE = './api.php';
 
-async function apiFetchKey(): Promise<string | null> {
+function cacheBustUrl(url: string): string {
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}_t=${Date.now()}`;
+}
+
+async function apiFetch(url: string, options?: RequestInit): Promise<Response> {
+  return fetch(cacheBustUrl(url), {
+    ...options,
+    headers: {
+      'Cache-Control': 'no-cache, no-store',
+      'Pragma': 'no-cache',
+      ...(options?.headers ?? {}),
+    },
+  });
+}
+
+// ─── API helpers ───
+
+async function apiFetchAllSettings(): Promise<Record<string, string>> {
   try {
-    const res = await fetch(`${API_BASE}?action=get_key`);
-    if (!res.ok) return null;
+    const res = await apiFetch(`${API_BASE}?action=get_all_settings`);
+    if (!res.ok) return {};
     const data = await res.json();
-    return data?.key_value ?? null;
+    return data?.settings ?? {};
   } catch {
-    return null;
+    return {};
   }
 }
 
-async function apiSaveKey(key_name: string, key_value: string): Promise<void> {
+async function apiFetchAllOrders(): Promise<Order[]> {
   try {
-    await fetch(`${API_BASE}?action=save_key`, {
+    const res = await apiFetch(`${API_BASE}?action=get_all_orders`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data?.orders ?? [];
+  } catch {
+    return [];
+  }
+}
+
+async function apiSaveKey(key_name: string, key_value: string): Promise<boolean> {
+  try {
+    const res = await apiFetch(`${API_BASE}?action=save_key`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key_name, key_value }),
     });
+    return res.ok;
   } catch {
-    // fire-and-forget; local state already updated
+    return false;
   }
 }
 
-async function apiSaveOrder(order: Order): Promise<void> {
+async function apiSaveOrder(order: Order): Promise<boolean> {
   try {
-    await fetch(`${API_BASE}?action=save_order`, {
+    const res = await apiFetch(`${API_BASE}?action=save_order`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        order_id: order.id,
         customer_name: order.customerName,
         details: order,
       }),
     });
+    return res.ok;
   } catch {
-    // fire-and-forget; local state already updated
+    return false;
+  }
+}
+
+async function apiUpdateOrderStatus(
+  orderId: string,
+  updates: { status?: string; paymentStatus?: string }
+): Promise<boolean> {
+  try {
+    const res = await apiFetch(`${API_BASE}?action=update_order_status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order_id: orderId, ...updates }),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
@@ -67,7 +115,7 @@ interface AppState {
   // Products
   products: Product[];
   addProduct: (product: Product) => void;
-  updateProduct: (product: Product) =? void;
+  updateProduct: (product: Product) => void;
   deleteProduct: (productId: string) => void;
 
   // Current page
@@ -87,8 +135,9 @@ interface AppState {
   deleteCustomPaymentGateway: (id: string) => void;
   customGatewayIds: string[];
 
-  // API initialisation
+  // API initialisation & sync
   initialize: () => Promise<void>;
+  refreshFromServer: () => Promise<void>;
 }
 
 export const useStore = create<AppState>()(
@@ -131,24 +180,25 @@ export const useStore = create<AppState>()(
 
       // Orders
       orders: [],
-      addOrder: (order) => {
+      addOrder: async (order) => {
         set({ orders: [...get().orders, order] });
-        // Persist order to server
-        apiSaveOrder(order);
+        await apiSaveOrder(order);
       },
-      updateOrderStatus: (orderId, status) => {
+      updateOrderStatus: async (orderId, status) => {
         set({
           orders: get().orders.map((o) =>
             o.id === orderId ? { ...o, status } : o
           ),
         });
+        await apiUpdateOrderStatus(orderId, { status });
       },
-      updatePaymentStatus: (orderId, status) => {
+      updatePaymentStatus: async (orderId, status) => {
         set({
           orders: get().orders.map((o) =>
             o.id === orderId ? { ...o, paymentStatus: status } : o
           ),
         });
+        await apiUpdateOrderStatus(orderId, { paymentStatus: status });
       },
 
       // Admin
@@ -187,7 +237,7 @@ export const useStore = create<AppState>()(
       // Payment Gateways
       paymentGateways: defaultPaymentGateways,
       defaultGateway: 'midtrans',
-      updatePaymentGateway: (id, config) => {
+      updatePaymentGateway: async (id, config) => {
         const gateways = get().paymentGateways;
         if (!gateways[id]) return;
         const updated: PaymentGatewayConfig = {
@@ -201,35 +251,44 @@ export const useStore = create<AppState>()(
             [id]: updated,
           },
         });
-        // Persist each sensitive key field to server
+        // Persist each sensitive key field to server and wait for completion
         const keyFields: (keyof PaymentGatewayConfig)[] = [
-          'apiKey',
-          'secretKey',
-          'serverKey',
-          'clientKey',
-          'publicKey',
-          'privateKey',
+          'apiKey', 'secretKey', 'serverKey', 'clientKey', 'publicKey', 'privateKey',
         ];
+        const savePromises: Promise<boolean>[] = [];
         keyFields.forEach((field) => {
           const value = updated[field];
           if (typeof value === 'string' && value.trim() !== '') {
-            apiSaveKey(`${id}_${field}`, value);
+            savePromises.push(apiSaveKey(`${id}_${field}`, value));
           }
         });
+        // Also persist enabled/mode/merchantId
+        if (updated.enabled !== undefined) {
+          savePromises.push(apiSaveKey(`${id}_enabled`, String(updated.enabled)));
+        }
+        if (updated.mode) {
+          savePromises.push(apiSaveKey(`${id}_mode`, updated.mode));
+        }
+        if (updated.merchantId) {
+          savePromises.push(apiSaveKey(`${id}_merchantId`, updated.merchantId));
+        }
+        await Promise.all(savePromises);
       },
-      togglePaymentGateway: (id) => {
+      togglePaymentGateway: async (id) => {
         const gateways = get().paymentGateways;
         if (!gateways[id]) return;
+        const newEnabled = !gateways[id].enabled;
         set({
           paymentGateways: {
             ...gateways,
             [id]: {
               ...gateways[id],
-              enabled: !gateways[id].enabled,
+              enabled: newEnabled,
               lastUpdated: new Date().toISOString(),
             },
           },
         });
+        await apiSaveKey(`${id}_enabled`, String(newEnabled));
       },
       setDefaultGateway: (id) => set({ defaultGateway: id }),
       resetPaymentGateway: (id) => {
@@ -246,7 +305,7 @@ export const useStore = create<AppState>()(
       addCustomPaymentGateway: (gateway) => {
         const gateways = get().paymentGateways;
         const customIds = get().customGatewayIds;
-        if (gateways[gateway.id]) return; // ID already exists
+        if (gateways[gateway.id]) return;
         set({
           paymentGateways: {
             ...gateways,
@@ -261,7 +320,7 @@ export const useStore = create<AppState>()(
       deleteCustomPaymentGateway: (id) => {
         const gateways = get().paymentGateways;
         const customIds = get().customGatewayIds;
-        if (!customIds.includes(id)) return; // Cannot delete built-in gateway
+        if (!customIds.includes(id)) return;
         const rest = Object.fromEntries(
           Object.entries(gateways).filter(([key]) => key !== id)
         );
@@ -273,22 +332,56 @@ export const useStore = create<AppState>()(
         });
       },
 
-      // API initialisation — call once on app start to hydrate keys from server
-      initialize: async () => {
-        const keyValue = await apiFetchKey();
-        if (!keyValue) return;
+      // Fetch all data from server and merge into state
+      refreshFromServer: async () => {
+        const [settings, serverOrders] = await Promise.all([
+          apiFetchAllSettings(),
+          apiFetchAllOrders(),
+        ]);
 
-        // The API stores a single key_value per settings row (id=1).
-        // If the project evolves to store a JSON blob of all keys, parse it here.
-        // For now we surface the returned value so callers can use it directly.
-        // Nothing in the Zustand state needs to change unless a gateway key
-        // explicitly matches — this hook is the extension point for that logic.
+        // Merge server orders with local orders (server is source of truth)
+        if (serverOrders.length > 0) {
+          const localOrders = get().orders;
+          const serverOrderIds = new Set(serverOrders.map((o) => o.id));
+          // Keep local orders not yet on server, then append server orders
+          const localOnly = localOrders.filter((o) => !serverOrderIds.has(o.id));
+          set({ orders: [...serverOrders, ...localOnly] });
+        }
+
+        // Merge settings into payment gateways
+        if (Object.keys(settings).length > 0) {
+          const gateways = { ...get().paymentGateways };
+          const keyFields = ['apiKey', 'secretKey', 'serverKey', 'clientKey', 'publicKey', 'privateKey', 'merchantId', 'enabled', 'mode'] as const;
+
+          for (const gatewayId of Object.keys(gateways)) {
+            let updated = false;
+            for (const field of keyFields) {
+              const settingKey = `${gatewayId}_${field}`;
+              if (settings[settingKey] !== undefined && settings[settingKey] !== null) {
+                if (field === 'enabled') {
+                  (gateways[gatewayId] as any)[field] = settings[settingKey] === 'true';
+                } else {
+                  (gateways[gatewayId] as any)[field] = settings[settingKey];
+                }
+                updated = true;
+              }
+            }
+            if (updated) {
+              gateways[gatewayId] = { ...gateways[gatewayId] };
+            }
+          }
+          set({ paymentGateways: gateways });
+        }
+      },
+
+      // Initialize: fetch both settings and orders from server
+      initialize: async () => {
+        await get().refreshFromServer();
       },
     }),
     {
       name: 'pcbeer-storage',
       onRehydrateStorage: () => (state) => {
-        // After localStorage rehydration, fetch fresh keys from the server
         if (state) {
           state.initialize();
         }
