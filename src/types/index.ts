@@ -7,8 +7,8 @@ export interface Product {
   image: string;
   category: string;
   stock: number;
-  alcohol: number; // Used as "version number" or rating for software
-  volume: string; // Used as "license type" for software, or "set type" for hardware
+  alcohol: number;
+  volume: string;
   origin: string;
   featured: boolean;
   createdAt: string;
@@ -49,7 +49,6 @@ export interface PaymentGatewayConfig {
   name: string;
   enabled: boolean;
   mode: 'sandbox' | 'production';
-  // Common fields
   merchantId?: string;
   apiKey?: string;
   secretKey?: string;
@@ -57,12 +56,9 @@ export interface PaymentGatewayConfig {
   clientKey?: string;
   publicKey?: string;
   privateKey?: string;
-  // Webhook
   webhookUrl?: string;
   callbackUrl?: string;
-  // Custom fields
   customFields?: Record<string, string>;
-  // Metadata
   logo: string;
   description: string;
   supportedMethods: string[];

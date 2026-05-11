@@ -1,3 +1,5 @@
+import { Routes, Route, useLocation } from 'react-router-dom';
+import { useEffect } from 'react';
 import Navbar from './components/Navbar';
 import HomePage from './components/HomePage';
 import ProductsPage from './components/ProductsPage';
@@ -12,58 +14,40 @@ import TermsPage from './components/TermsPage';
 import PrivacyPage from './components/PrivacyPage';
 import FAQPage from './components/FAQPage';
 import RefundPage from './components/RefundPage';
-import { useStore } from './store';
-import { useEffect } from 'react';
 
-export default function App() {
-  const { currentPage } = useStore();
-
-  // Scroll to top on page change
+function ScrollToTop() {
+  const { pathname } = useLocation();
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [currentPage]);
+  }, [pathname]);
+  return null;
+}
 
-  const renderPage = () => {
-    switch (currentPage) {
-      case 'home':
-        return <HomePage />;
-      case 'products':
-        return <ProductsPage />;
-      case 'product-detail':
-        return <ProductDetail />;
-      case 'cart':
-        return <CartPage />;
-      case 'checkout':
-        return <CheckoutPage />;
-      case 'orders':
-        return <OrdersPage />;
-      case 'terms':
-        return <TermsPage />;
-      case 'privacy':
-        return <PrivacyPage />;
-      case 'faq':
-        return <FAQPage />;
-      case 'refund':
-        return <RefundPage />;
-      case 'admin-login':
-        return <AdminLogin />;
-      case 'admin-dashboard':
-      case 'admin-products':
-      case 'admin-orders':
-      case 'admin-add-product':
-      case 'admin-edit-product':
-        return <AdminDashboard />;
-      default:
-        return <HomePage />;
-    }
-  };
-
-  const isAdminPage = ['admin-dashboard', 'admin-products', 'admin-orders', 'admin-add-product', 'admin-edit-product'].includes(currentPage);
+export default function App() {
+  const { pathname } = useLocation();
+  const isAdminPage = pathname.startsWith('/admin') && pathname !== '/admin';
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <ScrollToTop />
       {!isAdminPage && <Navbar />}
-      <main>{renderPage()}</main>
+      <main>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/products" element={<ProductsPage />} />
+          <Route path="/product/:id" element={<ProductDetail />} />
+          <Route path="/cart" element={<CartPage />} />
+          <Route path="/checkout" element={<CheckoutPage />} />
+          <Route path="/orders" element={<OrdersPage />} />
+          <Route path="/admin" element={<AdminLogin />} />
+          <Route path="/admin/dashboard" element={<AdminDashboard />} />
+          <Route path="/terms" element={<TermsPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/faq" element={<FAQPage />} />
+          <Route path="/refund" element={<RefundPage />} />
+          <Route path="*" element={<HomePage />} />
+        </Routes>
+      </main>
       <ToastContainer />
     </div>
   );
