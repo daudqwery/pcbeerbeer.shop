@@ -4,6 +4,7 @@ import { CartItem, Order, AdminState, Product, PaymentGatewayConfig } from '../t
 import { defaultPaymentGateways } from '../data/paymentGateways';
 
 const API_BASE = './api.php';
+const PRODUCTS_API = './index.php';
 
 function cacheBustUrl(url: string): string {
   const sep = url.includes('?') ? '&' : '?';
@@ -37,11 +38,39 @@ async function apiLogin(username: string, password: string): Promise<boolean> {
 }
 async function apiLogout(): Promise<void> { try { await apiFetch(`${API_BASE}?action=logout`, { method: 'POST' }); } catch {} }
 
+async function apiFetchProducts(): Promise<Product[]> {
+  const res = await apiFetch(PRODUCTS_API);
+  if (!res.ok) throw new Error(`Failed to fetch products: ${res.status}`);
+  const data = await res.json();
+  if (data?.status === 'error') throw new Error(data.message || 'Server error');
+  const raw: any[] = data?.products ?? [];
+  return raw.map((p: any): Product => ({
+    id: String(p.id ?? ''),
+    name: String(p.name ?? ''),
+    description: String(p.description ?? ''),
+    price: Number(p.price) || 0,
+    originalPrice: p.originalPrice != null ? Number(p.originalPrice) || undefined : undefined,
+    image: String(p.image ?? ''),
+    category: String(p.category ?? ''),
+    stock: Number(p.stock) || 0,
+    alcohol: Number(p.alcohol) || 0,
+    volume: String(p.volume ?? ''),
+    origin: String(p.origin ?? ''),
+    featured: Boolean(p.featured),
+    createdAt: String(p.createdAt ?? ''),
+  }));
+}
+
 interface AppState {
+  products: Product[];
+  isLoading: boolean;
+  error: string | null;
+  fetchProducts: () => Promise<void>;
+
   cart: CartItem[]; addToCart: (item: CartItem) => void; removeFromCart: (productId: string) => void; updateQuantity: (productId: string, quantity: number) => void; clearCart: () => void; cartTotal: () => number; cartCount: () => number;
   orders: Order[]; addOrder: (order: Order) => Promise<void>; updateOrderStatus: (orderId: string, status: Order['status']) => Promise<void>; updatePaymentStatus: (orderId: string, status: Order['paymentStatus']) => Promise<void>;
   admin: AdminState; login: (username: string, password: string) => Promise<boolean>; logout: () => void; checkSession: () => Promise<boolean>;
-  products: Product[]; addProduct: (product: Product) => void; updateProduct: (product: Product) => void; deleteProduct: (productId: string) => void;
+  addProduct: (product: Product) => void; updateProduct: (product: Product) => void; deleteProduct: (productId: string) => void;
   selectedProductId: string | null; setSelectedProductId: (id: string | null) => void;
   paymentGateways: Record<string, PaymentGatewayConfig>; defaultGateway: string; updatePaymentGateway: (id: string, config: Partial<PaymentGatewayConfig>) => Promise<void>; togglePaymentGateway: (id: string) => Promise<void>; setDefaultGateway: (id: string) => void; resetPaymentGateway: (id: string) => void; addCustomPaymentGateway: (gateway: PaymentGatewayConfig) => void; deleteCustomPaymentGateway: (id: string) => void; customGatewayIds: string[];
   initialize: () => Promise<void>; refreshFromServer: () => Promise<void>;
@@ -50,6 +79,19 @@ interface AppState {
 export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
+      products: [],
+      isLoading: false,
+      error: null,
+      fetchProducts: async () => {
+        set({ isLoading: true, error: null });
+        try {
+          const products = await apiFetchProducts();
+          set({ products, isLoading: false });
+        } catch (e: any) {
+          set({ error: e?.message || 'Failed to load products', isLoading: false });
+        }
+      },
+
       cart: [],
       addToCart: (item) => { const { cart } = get(); const existing = cart.find((i) => i.productId === item.productId); if (existing) { set({ cart: cart.map((i) => i.productId === item.productId ? { ...i, quantity: i.quantity + item.quantity } : i) }); } else { set({ cart: [...cart, item] }); } },
       removeFromCart: (productId) => { set({ cart: get().cart.filter((i) => i.productId !== productId) }); },
@@ -65,7 +107,6 @@ export const useStore = create<AppState>()(
       login: async (username, password) => { const ok = await apiLogin(username, password); if (ok) { set({ admin: { isLoggedIn: true, username } }); return true; } if (username === 'admin' && password === 'admin123') { set({ admin: { isLoggedIn: true, username } }); return true; } return false; },
       logout: () => { apiLogout(); set({ admin: { isLoggedIn: false, username: '' } }); },
       checkSession: async () => { const localAdmin = get().admin; if (localAdmin.isLoggedIn) { const session = await apiCheckSession(); if (session.loggedIn) { set({ admin: { isLoggedIn: true, username: session.username || localAdmin.username } }); return true; } return true; } const session = await apiCheckSession(); if (session.loggedIn) { set({ admin: { isLoggedIn: true, username: session.username } }); return true; } return false; },
-      products: [],
       addProduct: (product) => { set({ products: [...get().products, product] }); },
       updateProduct: (product) => { set({ products: get().products.map((p) => p.id === product.id ? product : p) }); },
       deleteProduct: (productId) => { set({ products: get().products.filter((p) => p.id !== productId) }); },
@@ -81,8 +122,26 @@ export const useStore = create<AppState>()(
       addCustomPaymentGateway: (gateway) => { const gateways = get().paymentGateways; const customIds = get().customGatewayIds; if (gateways[gateway.id]) return; set({ paymentGateways: { ...gateways, [gateway.id]: { ...gateway, lastUpdated: new Date().toISOString() } }, customGatewayIds: [...customIds, gateway.id] }); },
       deleteCustomPaymentGateway: (id) => { const gateways = get().paymentGateways; const customIds = get().customGatewayIds; if (!customIds.includes(id)) return; const rest = Object.fromEntries(Object.entries(gateways).filter(([key]) => key !== id)); const isDefault = get().defaultGateway === id; set({ paymentGateways: rest, customGatewayIds: customIds.filter((cid) => cid !== id), ...(isDefault ? { defaultGateway: 'midtrans' } : {}) }); },
       refreshFromServer: async () => { const [settings, serverOrders] = await Promise.all([apiFetchAllSettings(), apiFetchAllOrders()]); if (serverOrders.length > 0) { const localOrders = get().orders; const serverOrderIds = new Set(serverOrders.map((o) => o.id)); const localOnly = localOrders.filter((o) => !serverOrderIds.has(o.id)); set({ orders: [...serverOrders, ...localOnly] }); } if (Object.keys(settings).length > 0) { const gateways = { ...get().paymentGateways }; const keyFields = ['apiKey', 'secretKey', 'serverKey', 'clientKey', 'publicKey', 'privateKey', 'merchantId', 'enabled', 'mode'] as const; for (const gatewayId of Object.keys(gateways)) { let updated = false; for (const field of keyFields) { const settingKey = `${gatewayId}_${field}`; if (settings[settingKey] !== undefined && settings[settingKey] !== null) { if (field === 'enabled') { (gateways[gatewayId] as any)[field] = settings[settingKey] === 'true'; } else { (gateways[gatewayId] as any)[field] = settings[settingKey]; } updated = true; } } if (updated) { gateways[gatewayId] = { ...gateways[gatewayId] }; } } set({ paymentGateways: gateways }); } },
-      initialize: async () => { await get().refreshFromServer(); await get().checkSession(); },
+      initialize: async () => {
+        await Promise.all([
+          get().fetchProducts(),
+          get().refreshFromServer(),
+          get().checkSession(),
+        ]);
+      },
     }),
-    { name: 'pcbeer-storage', onRehydrateStorage: () => (state) => { if (state) { state.initialize(); } } }
+    {
+      name: 'pcbeer-storage',
+      partialize: (state) => ({
+        cart: state.cart,
+        orders: state.orders,
+        admin: state.admin,
+        selectedProductId: state.selectedProductId,
+        paymentGateways: state.paymentGateways,
+        defaultGateway: state.defaultGateway,
+        customGatewayIds: state.customGatewayIds,
+      }),
+      onRehydrateStorage: () => (state) => { if (state) { state.initialize(); } },
+    }
   )
 );
